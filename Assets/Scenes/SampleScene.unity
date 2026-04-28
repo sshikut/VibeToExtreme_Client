@@ -424,7 +424,7 @@ MonoBehaviour:
   m_OnClick:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1095969930}
+      - m_Target: {fileID: 0}
         m_TargetAssemblyTypeName: ServerTester, Assembly-CSharp
         m_MethodName: SendCrashBomb
         m_Mode: 1
@@ -691,7 +691,7 @@ MonoBehaviour:
   m_OnClick:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 1095969930}
+      - m_Target: {fileID: 0}
         m_TargetAssemblyTypeName: ServerTester, Assembly-CSharp
         m_MethodName: TriggerAbnormalDisconnect
         m_Mode: 1
@@ -750,7 +750,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1095969931}
-  - component: {fileID: 1095969930}
+  - component: {fileID: 1095969932}
   m_Layer: 0
   m_Name: ServerTester
   m_TagString: Untagged
@@ -758,18 +758,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &1095969930
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1095969929}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 58fd60260e60aff44bcd0da136b84513, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!4 &1095969931
 Transform:
   m_ObjectHideFlags: 0
@@ -785,6 +773,18 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1095969932
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1095969929}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b87b9e788452bb243b5ec3661c84c5dc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &1164237197
 GameObject:
   m_ObjectHideFlags: 0
