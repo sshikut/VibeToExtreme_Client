@@ -91,31 +91,21 @@ public class NetworkManager : MonoBehaviour
                     while (true)
                     {
                         int dataSize = writePos - readPos;
-                        if (dataSize < sizeof(PacketHeader)) break; // 헤더조차 덜 왔으면 대기
+                        if (dataSize < sizeof(PacketHeader)) break;
 
-                        // 현재 읽기 커서(readPos) 위치의 헤더를 확인
                         PacketHeader* header = (PacketHeader*)(basePtr + readPos);
+                        if (header->size <= 0 || header->size > recvBuffer.Length) { Disconnect(); return; }
+                        if (dataSize < header->size) break;
 
-                        // 🚨 방어막: 패킷 크기가 이상하면 즉시 쳐냅니다.
-                        if (header->size <= 0 || header->size > recvBuffer.Length)
-                        {
-                            Debug.LogError("🚨 패킷 사이즈 오류! 연결을 종료합니다.");
-                            Disconnect();
-                            return;
-                        }
-
-                        if (dataSize < header->size) break; // 패킷 본문이 덜 왔으면 대기
-
-                        // ----------------------------------------------------
-                        // 여기서부터 패킷 1개를 완벽하게 처리합니다!
-                        // ----------------------------------------------------
                         byte* packetPtr = basePtr + readPos;
 
+                        // ==============================================================
+                        // 여기서부터 패킷 분기 처리
+                        // ==============================================================
                         if (header->id == 1 || header->id == 2) // 이동
                         {
+                            // ★ MovePacket은 내부에 size, id가 없으므로 헤더를 건너뜁니다! (+ sizeof(PacketHeader))
                             C2S_MovePacket* movePkt = (C2S_MovePacket*)(packetPtr + sizeof(PacketHeader));
-
-                            Debug.Log($"⬇️ [수신] 서버로부터 {movePkt->sessionId}번 유저 이동 명령 도착!");
 
                             if (otherPlayers.TryGetValue(movePkt->sessionId, out PlayerController target))
                             {
@@ -124,7 +114,9 @@ public class NetworkManager : MonoBehaviour
                         }
                         else if (header->id == 3) // 퇴장
                         {
-                            S2C_LeavePacket* leavePkt = (S2C_LeavePacket*)(packetPtr + sizeof(PacketHeader));
+                            // ★ LeavePacket은 구조체 내부에 size, id가 있으므로 건너뛰지 않습니다!
+                            S2C_LeavePacket* leavePkt = (S2C_LeavePacket*)packetPtr;
+
                             if (otherPlayers.TryGetValue(leavePkt->sessionId, out PlayerController target))
                             {
                                 Destroy(target.gameObject);
@@ -133,7 +125,8 @@ public class NetworkManager : MonoBehaviour
                         }
                         else if (header->id == 4) // 스폰
                         {
-                            S2C_SpawnPacket* spawnPkt = (S2C_SpawnPacket*)(packetPtr + sizeof(PacketHeader));
+                            // ★ SpawnPacket도 건너뛰지 않습니다!
+                            S2C_SpawnPacket* spawnPkt = (S2C_SpawnPacket*)packetPtr;
                             int newSessionId = spawnPkt->sessionId;
 
                             if (newSessionId != mySessionId && !otherPlayers.ContainsKey(newSessionId))
@@ -144,13 +137,14 @@ public class NetworkManager : MonoBehaviour
                                 otherPlayers.Add(newSessionId, newPc);
                             }
                         }
-                        else if (header->id == 5)
+                        else if (header->id == 5) // 로그인 통보
                         {
-                            S2C_LoginPacket* loginPkt = (S2C_LoginPacket*)(packetPtr + sizeof(PacketHeader));
+                            // ★ LoginPacket도 건너뛰지 않습니다!
+                            S2C_LoginPacket* loginPkt = (S2C_LoginPacket*)packetPtr;
                             mySessionId = loginPkt->mySessionId;
-                            Debug.Log($"서버 접속 완료! 부여받은 내 고유 세션 ID: {mySessionId}");
+                            Debug.Log($"[성공] 서버 접속 완료! 서버가 부여한 내 진짜 ID: {mySessionId}");
                         }
-                        // ★ 핵심: 패킷 1개를 처리했으니 커서를 전진시킵니다!
+
                         readPos += header->size;
                     }
                 }
@@ -192,17 +186,16 @@ public class NetworkManager : MonoBehaviour
     // 2. unsafe 키워드: C++처럼 포인터를 사용하여 메모리 할당(new) 없이 직렬화합니다.
     public unsafe void SendMovePacket(float x, float y, float dx, float dy)
     {
-        // ID가 없으면 절대 패킷을 전송하지 않음
+        // 방어막 동작 확인 로그
         if (mySessionId == -1)
         {
-            Debug.LogWarning("아직 서버로부터 ID를 발급받지 못해 이동 패킷을 쏠 수 없습니다!");
+            Debug.LogWarning("아직 서버로부터 ID(5번 패킷)를 발급받지 못해 이동 패킷을 쏠 수 없습니다!");
             return;
         }
 
-        Debug.Log($"⬆️ [송신] 내 ID({mySessionId}) 이동 패킷 쏩니다! X:{x}, Y:{y}");
+        Debug.Log($"[송신] 내 ID({mySessionId}) 이동 패킷 쏩니다! X:{x}, Y:{y}");
 
-        // 보낼 데이터 세팅
-        PacketHeader header = new PacketHeader { size = 24, id = 1 }; // 1은 C2S_MOVE
+        PacketHeader header = new PacketHeader { size = 24, id = 1 };
         C2S_MovePacket movePkt = new C2S_MovePacket
         {
             sessionId = mySessionId,
@@ -212,17 +205,12 @@ public class NetworkManager : MonoBehaviour
             dirY = dy
         };
 
-        // 3. fixed 키워드: 가비지 컬렉터가 이 배열의 메모리 주소를 옮기지 못하게 '고정'시킵니다.
         fixed (byte* ptr = sendBuffer)
         {
-            // 포인터 캐스팅을 이용해 구조체를 sendBuffer 메모리에 직접 덮어씌웁니다. (C++과 동일!)
-            *(PacketHeader*)ptr = header; // 0~3번 인덱스에 헤더 기록
-
-            // 헤더 크기(4바이트)만큼 주소를 이동한 뒤 바디 기록
+            *(PacketHeader*)ptr = header;
             *(C2S_MovePacket*)(ptr + sizeof(PacketHeader)) = movePkt;
         }
 
-        // 4. 단 1바이트의 쓰레기(GC)도 만들지 않고 전송 완료!
         if (serverSocket != null && serverSocket.Connected)
         {
             serverSocket.Send(sendBuffer, 0, header.size, SocketFlags.None);
