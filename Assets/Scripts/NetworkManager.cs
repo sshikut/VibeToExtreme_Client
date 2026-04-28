@@ -40,6 +40,14 @@ struct S2C_LeavePacket
     public int sessionId;  // 방금 나간 놈의 번호
 }
 
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+struct S2C_LoginPacket
+{
+    public ushort size;
+    public ushort id;      // 5
+    public int mySessionId;
+}
+
 public class NetworkManager : MonoBehaviour
 {
     public static NetworkManager Instance; // 싱글톤 인스턴스
@@ -49,11 +57,13 @@ public class NetworkManager : MonoBehaviour
         Instance = this;
     }
 
+    private int writePos = 0; 
+    private int readPos = 0;
     // 1. 메모리 풀링: 프로그램 시작부터 끝까지 재사용할 단 하나의 송신 버퍼!
     private byte[] sendBuffer = new byte[1024];
     private byte[] recvBuffer = new byte[65535];
     private Socket serverSocket;
-    private int mySessionId = 1; // 임시 테스트용
+    private int mySessionId = -1; // 임시 테스트용
 
     public Dictionary<int, PlayerController> otherPlayers = new Dictionary<int, PlayerController>();
     public GameObject playerPrefab; // 인스펙터에서 연결할 다른 유저 프리팹
@@ -67,65 +77,93 @@ public class NetworkManager : MonoBehaviour
     {
         if (serverSocket != null && serverSocket.Connected && serverSocket.Poll(0, SelectMode.SelectRead))
         {
-            int recvBytes = serverSocket.Receive(recvBuffer);
+            // 1. 남은 공간(recvBuffer.Length - writePos)만큼만 안전하게 받습니다.
+            int recvBytes = serverSocket.Receive(recvBuffer, writePos, recvBuffer.Length - writePos, SocketFlags.None);
+            if (recvBytes <= 0) return; // 서버가 끊김
 
-            if (recvBytes > 0)
+            writePos += recvBytes; // OS가 데이터를 넣어줬으니 쓰기 커서 전진!
+
+            unsafe
             {
-                // 안전벨트를 풉니다! (Zero-Allocation 역직렬화)
-                unsafe
+                fixed (byte* basePtr = recvBuffer)
                 {
-                    fixed (byte* ptr = recvBuffer)
+                    // 2. 뭉쳐서 온 패킷들을 모두 썰어내는 while 루프!
+                    while (true)
                     {
-                        PacketHeader* header = (PacketHeader*)ptr;
-                        if (recvBytes < sizeof(PacketHeader) || recvBytes < header->size) return;
+                        int dataSize = writePos - readPos;
+                        if (dataSize < sizeof(PacketHeader)) break; // 헤더조차 덜 왔으면 대기
 
-                        // ==========================================
-                        // 1번: 누군가 이동했다! (C2S_MOVE / S2C_MOVE_BROAD)
-                        // ==========================================
-                        if (header->id == 1 || header->id == 2)
+                        // 현재 읽기 커서(readPos) 위치의 헤더를 확인
+                        PacketHeader* header = (PacketHeader*)(basePtr + readPos);
+
+                        // 🚨 방어막: 패킷 크기가 이상하면 즉시 쳐냅니다.
+                        if (header->size <= 0 || header->size > recvBuffer.Length)
                         {
-                            C2S_MovePacket* movePkt = (C2S_MovePacket*)(ptr + sizeof(PacketHeader));
+                            Debug.LogError("🚨 패킷 사이즈 오류! 연결을 종료합니다.");
+                            Disconnect();
+                            return;
+                        }
+
+                        if (dataSize < header->size) break; // 패킷 본문이 덜 왔으면 대기
+
+                        // ----------------------------------------------------
+                        // 여기서부터 패킷 1개를 완벽하게 처리합니다!
+                        // ----------------------------------------------------
+                        byte* packetPtr = basePtr + readPos;
+
+                        if (header->id == 1 || header->id == 2) // 이동
+                        {
+                            C2S_MovePacket* movePkt = (C2S_MovePacket*)(packetPtr + sizeof(PacketHeader));
+
+                            Debug.Log($"⬇️ [수신] 서버로부터 {movePkt->sessionId}번 유저 이동 명령 도착!");
+
                             if (otherPlayers.TryGetValue(movePkt->sessionId, out PlayerController target))
                             {
                                 target.SetTargetPosition(movePkt->posX, movePkt->posY, movePkt->dirX, movePkt->dirY);
                             }
                         }
-                        // ==========================================
-                        // 3번: 누군가 나갔다! (S2C_LEAVE)
-                        // ==========================================
-                        else if (header->id == 3)
+                        else if (header->id == 3) // 퇴장
                         {
-                            S2C_LeavePacket* leavePkt = (S2C_LeavePacket*)(ptr + sizeof(PacketHeader));
-                            int leftSessionId = leavePkt->sessionId;
-
-                            // 방금 배운 완벽한 '우아한 삭제' 로직
-                            if (otherPlayers.TryGetValue(leftSessionId, out PlayerController target))
+                            S2C_LeavePacket* leavePkt = (S2C_LeavePacket*)(packetPtr + sizeof(PacketHeader));
+                            if (otherPlayers.TryGetValue(leavePkt->sessionId, out PlayerController target))
                             {
-                                Destroy(target.gameObject);         // 1. 화면에서 파괴!
-                                otherPlayers.Remove(leftSessionId); // 2. 딕셔너리 명부에서 삭제!
+                                Destroy(target.gameObject);
+                                otherPlayers.Remove(leavePkt->sessionId);
                             }
                         }
-                        // ==========================================
-                        // 4번: 누군가 들어왔다! (S2C_SPAWN)
-                        // ==========================================
-                        else if (header->id == 4)
+                        else if (header->id == 4) // 스폰
                         {
-                            S2C_SpawnPacket* spawnPkt = (S2C_SpawnPacket*)(ptr + sizeof(PacketHeader));
+                            S2C_SpawnPacket* spawnPkt = (S2C_SpawnPacket*)(packetPtr + sizeof(PacketHeader));
                             int newSessionId = spawnPkt->sessionId;
 
-                            // 내 번호가 아니고, 명부에 없는 뉴비라면 화면에 스폰!
                             if (newSessionId != mySessionId && !otherPlayers.ContainsKey(newSessionId))
                             {
                                 Vector3 spawnPos = new Vector3(spawnPkt->spawnX, spawnPkt->spawnY, 0);
                                 GameObject newObj = Instantiate(playerPrefab, spawnPos, Quaternion.identity);
                                 PlayerController newPc = newObj.GetComponent<PlayerController>();
-
                                 otherPlayers.Add(newSessionId, newPc);
                             }
                         }
+                        else if (header->id == 5)
+                        {
+                            S2C_LoginPacket* loginPkt = (S2C_LoginPacket*)(packetPtr + sizeof(PacketHeader));
+                            mySessionId = loginPkt->mySessionId;
+                            Debug.Log($"서버 접속 완료! 부여받은 내 고유 세션 ID: {mySessionId}");
+                        }
+                        // ★ 핵심: 패킷 1개를 처리했으니 커서를 전진시킵니다!
+                        readPos += header->size;
                     }
                 }
             }
+
+            // 3. 다 처리하고 남은 짜투리 데이터를 버퍼 맨 앞으로 복사
+            int remaining = writePos - readPos;
+            if (remaining > 0 && readPos > 0)
+            {
+                Array.Copy(recvBuffer, readPos, recvBuffer, 0, remaining);
+            }
+            writePos = remaining;
+            readPos = 0;
         }
     }
 
@@ -154,6 +192,15 @@ public class NetworkManager : MonoBehaviour
     // 2. unsafe 키워드: C++처럼 포인터를 사용하여 메모리 할당(new) 없이 직렬화합니다.
     public unsafe void SendMovePacket(float x, float y, float dx, float dy)
     {
+        // ID가 없으면 절대 패킷을 전송하지 않음
+        if (mySessionId == -1)
+        {
+            Debug.LogWarning("아직 서버로부터 ID를 발급받지 못해 이동 패킷을 쏠 수 없습니다!");
+            return;
+        }
+
+        Debug.Log($"⬆️ [송신] 내 ID({mySessionId}) 이동 패킷 쏩니다! X:{x}, Y:{y}");
+
         // 보낼 데이터 세팅
         PacketHeader header = new PacketHeader { size = 24, id = 1 }; // 1은 C2S_MOVE
         C2S_MovePacket movePkt = new C2S_MovePacket
