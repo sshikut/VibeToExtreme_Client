@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
+using TMPro;
+using Unity.VisualScripting;
 using UnityEngine;
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -75,6 +77,9 @@ public class NetworkManager : MonoBehaviour
     public GameObject playerPrefab;
     private Queue<GameObject> playerPool = new Queue<GameObject>();
 
+    public TMP_InputField ipInput;
+    public GameObject ipPanel;
+
     void Awake()
     {
         Instance = this;
@@ -89,7 +94,21 @@ public class NetworkManager : MonoBehaviour
 
     void Start()
     {
-        ConnectToServer("127.0.0.1", 7777);
+        // ConnectToServer("127.0.0.1", 7777);
+    }
+
+    public void StartClient()
+    {
+        string ip = ipInput.text;
+        if (ip != null)
+        {
+            ConnectToServer(ip, 7777);
+        }
+        else
+        {
+            Debug.Log("IP를 적으시오.");
+        }
+        
     }
 
     public void ConnectToServer(string ip, int port)
@@ -105,6 +124,8 @@ public class NetworkManager : MonoBehaviour
             receiveThread = new Thread(ReceiveLoop);
             receiveThread.IsBackground = true;
             receiveThread.Start();
+
+            ipPanel.SetActive(false);
         }
         catch (Exception e)
         {
